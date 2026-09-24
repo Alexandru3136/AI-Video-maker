@@ -1,0 +1,12 @@
+streamlit>=1.39
+google-genai>=1.0.0
+pydantic>=2.7
+edge-tts>=6.1
+piper-tts>=1.5
+chatterbox-tts>=0.1.7
+moviepy>=2.0
+requests>=2.32
+python-dotenv>=1.0
+pillow>=10.0
+numpy>=1.26
+ffmpeg-python>=0.2
