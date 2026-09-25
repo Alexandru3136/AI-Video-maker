@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import shutil
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -16,6 +17,8 @@ import requests
 from moviepy import AudioFileClip, VideoFileClip
 
 from script_engine import NarrationBeat
+
+log = logging.getLogger(__name__)
 
 @dataclass
 class SceneMedia:
@@ -67,12 +70,21 @@ def _download(url: str, destination: Path, timeout: int = 90) -> bool:
         return False
 
 
-def download_pexels_video(keywords: str, destination: Path, minimum_duration: float = 0, portrait: bool = False) -> bool:
+def download_pexels_video(
+    keywords: str,
+    destination: Path,
+    minimum_duration: float = 0,
+    portrait: bool = False,
+    used_video_ids: set[int] | None = None,
+) -> tuple[bool, int | None]:
+    """Download a Pexels video. Returns (success, video_id) for de-duplication."""
     key = os.getenv("PEXELS_API_KEY")
     if not key:
-        return False
+        return False, None
     orientation = "portrait" if portrait else "landscape"
     target_width, target_height = (1080, 1920) if portrait else (1920, 1080)
+    if used_video_ids is None:
+        used_video_ids = set()
     try:
         response = requests.get(
             "https://api.pexels.com/videos/search",
@@ -84,6 +96,9 @@ def download_pexels_video(keywords: str, destination: Path, minimum_duration: fl
         videos = response.json().get("videos", [])
         candidates = []
         for video in videos:
+            video_id = int(video.get("id", 0))
+            if video_id in used_video_ids:
+                continue
             duration = float(video.get("duration", 0))
             if duration < minimum_duration:
                 continue
@@ -91,23 +106,28 @@ def download_pexels_video(keywords: str, destination: Path, minimum_duration: fl
                 width, height = file.get("width", 0), file.get("height", 0)
                 if file.get("file_type") != "video/mp4":
                     continue
-                # Match orientation to the requested aspect ratio so Shorts get vertical footage.
                 if portrait and height >= 1280 and height > width:
-                    candidates.append((file, duration))
+                    candidates.append((file, duration, video_id))
                 elif not portrait and width >= 1280 and width >= height:
-                    candidates.append((file, duration))
+                    candidates.append((file, duration, video_id))
         if not candidates:
-            return False
-        chosen, _ = min(candidates, key=lambda item: abs(item[0].get("width", target_width) - target_width) + abs(item[0].get("height", target_height) - target_height))
-        return _download(chosen["link"], destination)
+            return False, None
+        chosen, _, chosen_id = min(candidates, key=lambda item: abs(item[0].get("width", target_width) - target_width) + abs(item[0].get("height", target_height) - target_height))
+        if _download(chosen["link"], destination):
+            return True, chosen_id
+        return False, None
     except (requests.RequestException, KeyError, ValueError):
-        return False
+        return False, None
 
 
 def download_pollinations_image(prompt: str, destination: Path, width: int = 1920, height: int = 1080) -> bool:
-    seed = random.randint(1, 2_147_483_647)
-    url = f"https://image.pollinations.ai/prompt/{quote_plus(prompt)}?width={width}&height={height}&seed={seed}&model=flux&nologo=true"
-    return _download(url, destination, timeout=120)
+    for attempt in range(2):
+        seed = random.randint(1, 2_147_483_647)
+        url = f"https://image.pollinations.ai/prompt/{quote_plus(prompt)}?width={width}&height={height}&seed={seed}&model=flux&nologo=true"
+        if _download(url, destination, timeout=120):
+            return True
+        log.warning("Pollinations attempt %d failed for prompt: %.60s", attempt + 1, prompt)
+    return False
 
 
 def _load_workflow() -> dict:
@@ -179,16 +199,30 @@ def _video_is_long_enough(video_path: Path, minimum_duration: float) -> bool:
         return False
 
 
-def acquire_visual(beat: NarrationBeat, source: VisualSource, output_dir: Path, aspect_ratio: str, audio_duration: float) -> tuple[Path, str, str]:
+def acquire_visual(
+    beat: NarrationBeat,
+    source: VisualSource,
+    output_dir: Path,
+    aspect_ratio: str,
+    audio_duration: float,
+    used_video_ids: set[int] | None = None,
+) -> tuple[Path, str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = output_dir / f"beat_{beat.beat_id:04d}"
+    if used_video_ids is None:
+        used_video_ids = set()
 
     if source == VisualSource.COMFYUI and generate_comfyui_video(beat.fallback_ai_prompt, stem.with_suffix(".mp4")) and _video_is_long_enough(stem.with_suffix(".mp4"), audio_duration):
         return stem.with_suffix(".mp4"), "video", VisualSource.COMFYUI.value
     stem.with_suffix(".mp4").unlink(missing_ok=True)
+
     portrait = aspect_ratio == "9:16 Shorts"
-    if source in {VisualSource.COMFYUI, VisualSource.PEXELS} and download_pexels_video(beat.pexels_keywords, stem.with_suffix(".mp4"), audio_duration, portrait):
-        return stem.with_suffix(".mp4"), "video", VisualSource.PEXELS.value
+    if source in {VisualSource.COMFYUI, VisualSource.PEXELS}:
+        ok, vid_id = download_pexels_video(beat.pexels_keywords, stem.with_suffix(".mp4"), audio_duration, portrait, used_video_ids)
+        if ok:
+            if vid_id is not None:
+                used_video_ids.add(vid_id)
+            return stem.with_suffix(".mp4"), "video", VisualSource.PEXELS.value
 
     width, height = (1080, 1920) if portrait else (1920, 1080)
     image_path = stem.with_suffix(".jpg")
@@ -202,10 +236,36 @@ def build_scene_media(beats: list[NarrationBeat], audio_paths: list[Path], outpu
         raise ValueError("Each visual beat must have exactly one narration file.")
     plan = plan_visual_sources(beats)
     media: list[SceneMedia] = []
+    used_video_ids: set[int] = set()
+    failed_beats: list[int] = []
+    max_retries = 2
+
     for index, (beat, audio_path) in enumerate(zip(beats, audio_paths), start=1):
         source = plan[beat.beat_id]
-        visual_path, visual_kind, actual_source = acquire_visual(beat, source, output_dir, aspect_ratio, _audio_duration(audio_path))
-        media.append(SceneMedia(beat, audio_path, visual_path, visual_kind, source.value, actual_source))
+        acquired = False
+        last_error: Exception | None = None
+        for attempt in range(max_retries):
+            try:
+                visual_path, visual_kind, actual_source = acquire_visual(
+                    beat, source, output_dir, aspect_ratio, _audio_duration(audio_path), used_video_ids,
+                )
+                media.append(SceneMedia(beat, audio_path, visual_path, visual_kind, source.value, actual_source))
+                acquired = True
+                break
+            except Exception as exc:
+                last_error = exc
+                log.warning("Beat %d attempt %d failed: %s", beat.beat_id, attempt + 1, exc)
+                # On retry, fall back to image source (cheapest/most reliable).
+                source = VisualSource.IMAGE
+
+        if not acquired:
+            failed_beats.append(beat.beat_id)
+            log.error("Beat %d failed permanently after %d retries: %s", beat.beat_id, max_retries, last_error)
+
         if progress_callback:
-            progress_callback(index, len(beats), source.value, actual_source)
+            status = actual_source if acquired else f"FAILED ({last_error})"
+            progress_callback(index, len(beats), plan[beat.beat_id].value, status)
+
+    if failed_beats:
+        raise RuntimeError(f"Could not acquire visuals for beats: {failed_beats}. {len(media)}/{len(beats)} succeeded.")
     return media

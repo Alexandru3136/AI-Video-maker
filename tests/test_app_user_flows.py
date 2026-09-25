@@ -143,6 +143,13 @@ def _generate_button(at: AppTest):
     raise AssertionError("Generate button not found")
 
 
+def _radio(at: AppTest, label: str):
+    for r in at.radio:
+        if r.label == label:
+            return r
+    raise AssertionError(f"Radio '{label}' not found")
+
+
 # --- Tests ----------------------------------------------------------------------
 
 def test_app_loads_without_error():
@@ -205,7 +212,7 @@ def test_happy_path_generates_video():
         at = _new_app().run()
         at.text_area[0].set_value("How Rome reshaped European trade").run()
         at.selectbox[1].set_value("Edge (online fallback)").run()
-        at.radio[0].set_value("16:9 Long-Form").run()
+        _radio(at, "Format video").set_value("16:9 Long-Form").run()
         _generate_button(at).click().run()
     assert not at.exception
     assert any("Gata:" in s.value for s in at.success)
@@ -231,7 +238,7 @@ def test_shorts_format_flows_through_to_media():
     with patched_backend(record):
         at = _new_app().run()
         at.text_area[0].set_value("Vertical short about Rome").run()
-        at.radio[0].set_value("9:16 Shorts").run()
+        _radio(at, "Format video").set_value("9:16 Shorts").run()
         at.selectbox[1].set_value("Edge (online fallback)").run()
         _generate_button(at).click().run()
     assert not at.exception
@@ -252,3 +259,33 @@ def test_engine_failure_shows_friendly_error_not_crash():
         _generate_button(at).click().run()
     assert not at.exception
     assert any("Generarea s-a oprit" in e.value for e in at.error)
+
+
+def test_history_page_shows_empty_state():
+    """Navigating to Istoric with no prior runs shows an info message."""
+    at = _new_app().run()
+    _radio(at, "Navigare").set_value("Istoric").run()
+    assert not at.exception
+    assert any("Nicio generare anterioara" in i.value for i in at.info)
+
+
+def test_history_page_shows_past_run():
+    """After generating a video, the history page lists it."""
+    with patched_backend() as _:
+        at = _new_app().run()
+        at.text_area[0].set_value("History test topic").run()
+        at.selectbox[1].set_value("Edge (online fallback)").run()
+        _generate_button(at).click().run()
+    assert not at.exception
+    # Switch to history page — the run should be listed.
+    _radio(at, "Navigare").set_value("Istoric").run()
+    assert not at.exception
+    assert at.info == []  # no empty-state message
+
+
+def test_voice_profiles_page_loads():
+    """The voice profiles page renders without error."""
+    at = _new_app().run()
+    _radio(at, "Navigare").set_value("Profiluri vocale").run()
+    assert not at.exception
+    assert any("Profiluri vocale" in t.value for t in at.title)

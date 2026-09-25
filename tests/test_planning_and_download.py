@@ -132,7 +132,8 @@ def test_generate_script_rejects_short_topic(monkeypatch):
 
 def test_pexels_returns_false_without_key(monkeypatch):
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
-    assert media_engine.download_pexels_video("rome", Path("x.mp4")) is False
+    ok, vid_id = media_engine.download_pexels_video("rome", Path("x.mp4"))
+    assert ok is False
 
 
 def test_pexels_requests_portrait_orientation_for_shorts(monkeypatch, tmp_path):
@@ -147,8 +148,8 @@ def test_pexels_requests_portrait_orientation_for_shorts(monkeypatch, tmp_path):
         return resp
 
     monkeypatch.setattr(media_engine.requests, "get", fake_get)
-    result = media_engine.download_pexels_video("rome", tmp_path / "v.mp4", 0, portrait=True)
-    assert result is False
+    ok, _ = media_engine.download_pexels_video("rome", tmp_path / "v.mp4", 0, portrait=True)
+    assert ok is False
     assert captured["params"]["orientation"] == "portrait"
 
 
@@ -164,7 +165,7 @@ def test_pexels_landscape_default(monkeypatch, tmp_path):
         return resp
 
     monkeypatch.setattr(media_engine.requests, "get", fake_get)
-    media_engine.download_pexels_video("rome", tmp_path / "v.mp4")
+    ok, _ = media_engine.download_pexels_video("rome", tmp_path / "v.mp4")
     assert captured["params"]["orientation"] == "landscape"
 
 
@@ -173,6 +174,7 @@ def test_pexels_picks_portrait_candidate(monkeypatch, tmp_path):
     videos = {
         "videos": [
             {
+                "id": 42,
                 "duration": 20,
                 "video_files": [
                     {"file_type": "video/mp4", "width": 1920, "height": 1080, "link": "http://land"},
@@ -196,7 +198,9 @@ def test_pexels_picks_portrait_candidate(monkeypatch, tmp_path):
 
     monkeypatch.setattr(media_engine.requests, "get", fake_get)
     monkeypatch.setattr(media_engine, "_download", fake_download)
-    assert media_engine.download_pexels_video("rome", tmp_path / "v.mp4", 0, portrait=True) is True
+    ok, vid_id = media_engine.download_pexels_video("rome", tmp_path / "v.mp4", 0, portrait=True)
+    assert ok is True
+    assert vid_id == 42
     assert downloaded["link"] == "http://port"
 
 
@@ -212,3 +216,52 @@ def test_pollinations_url_encodes_prompt(monkeypatch, tmp_path):
     assert "image.pollinations.ai" in captured["url"]
     assert "width=1080" in captured["url"] and "height=1920" in captured["url"]
     assert "a+roman+forum" in captured["url"] or "a%20roman%20forum" in captured["url"]
+
+
+def test_pexels_deduplication_skips_used_video(monkeypatch, tmp_path):
+    """A video already in used_video_ids should be skipped."""
+    monkeypatch.setenv("PEXELS_API_KEY", "test-key")
+    videos = {
+        "videos": [
+            {"id": 100, "duration": 20, "video_files": [{"file_type": "video/mp4", "width": 1920, "height": 1080, "link": "http://v100"}]},
+            {"id": 200, "duration": 20, "video_files": [{"file_type": "video/mp4", "width": 1920, "height": 1080, "link": "http://v200"}]},
+        ]
+    }
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        resp = mock.Mock()
+        resp.raise_for_status = lambda: None
+        resp.json = lambda: videos
+        return resp
+
+    downloaded = {}
+    def fake_download(link, destination, timeout=90):
+        downloaded["link"] = link
+        return True
+
+    monkeypatch.setattr(media_engine.requests, "get", fake_get)
+    monkeypatch.setattr(media_engine, "_download", fake_download)
+    # Video 100 already used — should pick 200 instead.
+    ok, vid_id = media_engine.download_pexels_video("rome", tmp_path / "v.mp4", 0, False, used_video_ids={100})
+    assert ok is True
+    assert vid_id == 200
+    assert downloaded["link"] == "http://v200"
+
+
+def test_gemini_retry_succeeds_on_second_attempt(monkeypatch):
+    """Gemini retry logic should recover from a transient failure."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    call_count = {"n": 0}
+
+    def fake_generate(model, contents, config):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise Exception("transient network error")
+        return mock.Mock(text=_script_json())
+
+    client = mock.Mock()
+    client.models.generate_content = fake_generate
+    monkeypatch.setattr(script_engine.genai, "Client", lambda api_key: client)
+    script = generate_script("Roman trade", "English", 12)
+    assert call_count["n"] == 2
+    assert len(script.scenes) == 4

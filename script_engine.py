@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
 from google import genai
 from pydantic import BaseModel, Field, ValidationError
+
+log = logging.getLogger(__name__)
 
 
 class Scene(BaseModel):
@@ -66,20 +70,29 @@ def generate_script(topic: str, language: str, target_minutes: int) -> VideoScri
         f"Create exactly {scene_count} scenes. The total narration should closely match the target runtime."
     )
     client = genai.Client(api_key=key)
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-        config={
-            "system_instruction": SYSTEM_PROMPT,
-            "response_mime_type": "application/json",
-            "response_json_schema": VideoScript.model_json_schema(),
-            "temperature": 0.75,
-        },
-    )
-    try:
-        script = VideoScript.model_validate(json.loads(_strip_json(response.text)))
-    except (ValidationError, json.JSONDecodeError, ValueError) as exc:
-        raise RuntimeError(f"Gemini returned an invalid structured script: {exc}") from exc
+    max_attempts = 3
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config={
+                    "system_instruction": SYSTEM_PROMPT,
+                    "response_mime_type": "application/json",
+                    "response_json_schema": VideoScript.model_json_schema(),
+                    "temperature": 0.75,
+                },
+            )
+            script = VideoScript.model_validate(json.loads(_strip_json(response.text)))
+            break
+        except (ValidationError, json.JSONDecodeError, ValueError, Exception) as exc:
+            last_error = exc
+            log.warning("Gemini attempt %d/%d failed: %s", attempt, max_attempts, exc)
+            if attempt < max_attempts:
+                time.sleep(2 ** attempt)
+    else:
+        raise RuntimeError(f"Gemini failed after {max_attempts} attempts: {last_error}") from last_error
 
     next_beat_id = 1
     for index, scene in enumerate(script.scenes, start=1):
