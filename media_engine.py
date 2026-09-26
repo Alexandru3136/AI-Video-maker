@@ -180,7 +180,7 @@ def generate_comfyui_video(prompt: str, destination: Path) -> bool:
     return False
 
 
-def _audio_duration(audio_path: Path) -> float:
+def audio_duration(audio_path: Path) -> float:
     audio = AudioFileClip(str(audio_path))
     try:
         return audio.duration
@@ -247,7 +247,7 @@ def build_scene_media(beats: list[NarrationBeat], audio_paths: list[Path], outpu
         for attempt in range(max_retries):
             try:
                 visual_path, visual_kind, actual_source = acquire_visual(
-                    beat, source, output_dir, aspect_ratio, _audio_duration(audio_path), used_video_ids,
+                    beat, source, output_dir, aspect_ratio, audio_duration(audio_path), used_video_ids,
                 )
                 media.append(SceneMedia(beat, audio_path, visual_path, visual_kind, source.value, actual_source))
                 acquired = True

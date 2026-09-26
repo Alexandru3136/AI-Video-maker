@@ -102,6 +102,7 @@ def patched_backend(record=None):
         stack.enter_context(mock.patch("video_composer.compose_video", _fake_compose_video))
         stack.enter_context(mock.patch("project_artifacts.write_subtitles", lambda *a, **k: Path(a[2])))
         stack.enter_context(mock.patch("project_artifacts.write_timeline_manifest", lambda *a, **k: Path(a[1])))
+        stack.enter_context(mock.patch("media_engine.audio_duration", return_value=5.0))
         yield
 
 

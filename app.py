@@ -8,7 +8,7 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
-from media_engine import build_scene_media
+from media_engine import VisualSource, audio_duration, acquire_visual, build_scene_media
 from preflight import blocking_failures, run_preflight
 from project_artifacts import write_subtitles, write_timeline_manifest
 from script_engine import generate_script
@@ -86,27 +86,77 @@ elif page == "Istoric":
                 else:
                     st.warning("Video final negasit (generare incompleta?).")
 
-                cols = st.columns(3)
+                # --- Run metadata & duration report ---
+                meta_file = run_dir / "run_meta.json"
+                cols = st.columns(4)
+                if meta_file.exists():
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                    target_min = meta.get("target_minutes", "?")
+                    actual_min = round(meta.get("actual_seconds", 0) / 60, 1)
+                    cols[0].metric("Durata tinta", f"{target_min} min")
+                    cols[1].metric("Durata reala", f"{actual_min} min")
+                    cols[2].metric("Beats", meta.get("beats_total", "?"))
+                    cols[3].metric("Motor TTS", meta.get("tts_engine", "?"))
+
                 if script_file.exists():
-                    with cols[0]:
-                        script_data = json.loads(script_file.read_text(encoding="utf-8"))
-                        st.metric("Scene", len(script_data.get("scenes", [])))
-                        total_beats = sum(len(s.get("beats", [])) for s in script_data.get("scenes", []))
-                        st.metric("Beats", total_beats)
+                    script_data = json.loads(script_file.read_text(encoding="utf-8"))
                 if timeline.exists():
-                    with cols[1]:
-                        tl_data = json.loads(timeline.read_text(encoding="utf-8"))
-                        beats_list = tl_data.get("beats", [])
-                        sources = {}
-                        for b in beats_list:
-                            src = b.get("actual_source", "unknown")
-                            sources[src] = sources.get(src, 0) + 1
-                        for src, count in sorted(sources.items()):
-                            st.metric(f"Vizual: {src}", count)
+                    tl_data = json.loads(timeline.read_text(encoding="utf-8"))
+                    beats_list = tl_data.get("beats", [])
+                    sources = {}
+                    for b in beats_list:
+                        src = b.get("actual_source", "unknown")
+                        sources[src] = sources.get(src, 0) + 1
+                    src_cols = st.columns(len(sources) + 1)
+                    for idx, (src, count) in enumerate(sorted(sources.items())):
+                        src_cols[idx].metric(f"Vizual: {src}", count)
+
+                    # --- Beat-level detail with retry controls ---
+                    with st.expander("Detalii per beat (retry manual)"):
+                        for beat_entry in beats_list:
+                            bid = beat_entry.get("beat_id", "?")
+                            narr = beat_entry.get("narration_text", "")[:80]
+                            planned = beat_entry.get("planned_source", "?")
+                            actual = beat_entry.get("actual_source", "?")
+                            vkind = beat_entry.get("visual_kind", "?")
+                            vpath = beat_entry.get("visual_path", "")
+
+                            bc1, bc2, bc3 = st.columns([5, 2, 2])
+                            bc1.write(f"**Beat {bid}**: {narr}...")
+                            bc2.write(f"📋 {planned} → ✅ {actual} ({vkind})")
+
+                            retry_key = f"retry_{run_dir.name}_{bid}"
+                            new_kw_key = f"kw_{run_dir.name}_{bid}"
+                            new_keywords = bc3.text_input("Keywords", value=beat_entry.get("narration_text", "")[:30], key=new_kw_key, label_visibility="collapsed")
+                            if st.button(f"Re-genera vizual beat {bid}", key=retry_key):
+                                from script_engine import NarrationBeat
+                                retry_beat = NarrationBeat(
+                                    beat_id=bid,
+                                    narration_text=beat_entry.get("narration_text", "placeholder narration"),
+                                    pexels_keywords=new_keywords,
+                                    fallback_ai_prompt=beat_entry.get("narration_text", "cinematic scene"),
+                                    is_key_action_moment=False,
+                                )
+                                audio_path = Path(beat_entry.get("audio_path", ""))
+                                visuals_dir = run_dir / "visuals"
+                                try:
+                                    ar = meta.get("aspect_ratio", "16:9 Long-Form") if meta_file.exists() else "16:9 Long-Form"
+                                    dur = audio_duration(audio_path) if audio_path.exists() else 5.0
+                                    new_path, new_kind, new_source = acquire_visual(
+                                        retry_beat, VisualSource.PEXELS, visuals_dir, ar, dur,
+                                    )
+                                    # Update timeline entry.
+                                    beat_entry["visual_path"] = str(new_path)
+                                    beat_entry["visual_kind"] = new_kind
+                                    beat_entry["actual_source"] = new_source
+                                    timeline.write_text(json.dumps(tl_data, ensure_ascii=False, indent=2), encoding="utf-8")
+                                    st.success(f"Beat {bid} re-generat cu succes ({new_source}).")
+                                    st.rerun()
+                                except Exception as exc:
+                                    st.error(f"Retry beat {bid} a esuat: {exc}")
+
                 if srt.exists():
-                    with cols[2]:
-                        st.caption("Subtitrari disponibile")
-                        st.download_button("Descarca SRT", srt.read_text(encoding="utf-8"), file_name="subtitles.srt", key=f"srt_{run_dir.name}")
+                    st.download_button("Descarca SRT", srt.read_text(encoding="utf-8"), file_name="subtitles.srt", key=f"srt_{run_dir.name}")
 
                 if script_file.exists():
                     with st.expander("Scenariu JSON"):
@@ -209,14 +259,37 @@ else:
                 progress.progress(completed, text=f"Vizual {index}/{total}: {actual} (planificat: {planned})")
 
             media = build_scene_media(beats, audio_paths, run_dir / "visuals", aspect_ratio, update_visual_progress)
+            # Save duration metadata alongside the timeline for the history page.
+            total_audio_sec = sum(audio_duration(ap) for ap in audio_paths)
             write_timeline_manifest(media, run_dir / "timeline.json")
+            (run_dir / "run_meta.json").write_text(json.dumps({
+                "target_minutes": duration,
+                "actual_seconds": round(total_audio_sec, 2),
+                "beats_total": len(beats),
+                "smoke_test": smoke_test,
+                "language": language,
+                "aspect_ratio": aspect_ratio,
+                "tts_engine": engine,
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
             progress.progress(70, text="Vizualuri pregatite")
 
             status.write("4/4 - Randare finala locala. Aceasta poate dura cateva minute...")
             output = compose_video(media, run_dir / "final_video.mp4", aspect_ratio)
             progress.progress(100, text="Videoclip finalizat")
+            # --- Duration report (total_audio_sec computed earlier for run_meta.json) ---
+            total_audio_min = total_audio_sec / 60
+            target_min = duration if not smoke_test else duration
+            delta = total_audio_min - target_min
+            delta_label = f"+{delta:.1f}" if delta >= 0 else f"{delta:.1f}"
+
             status.success(f"Gata: {output.name}")
             st.video(str(output))
+
+            report_cols = st.columns(3)
+            report_cols[0].metric("Durata tinta", f"{target_min} min")
+            report_cols[1].metric("Durata reala", f"{total_audio_min:.1f} min", delta=f"{delta_label} min")
+            report_cols[2].metric("Beats randate", f"{len(beats)}")
+
             with output.open("rb") as video_file:
                 st.download_button("Descarca MP4", video_file, file_name=output.name, mime="video/mp4")
 
