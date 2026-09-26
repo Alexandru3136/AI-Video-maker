@@ -83,9 +83,12 @@ if page == "Profiluri vocale":
     new_lang = st.selectbox("Limba profil", ["English", "Russian", "French", "Spanish", "German"], key="profile_lang")
     new_file = st.file_uploader("Inregistrare de referinta (WAV/MP3/FLAC, 10-30 sec)", type=["wav", "mp3", "flac"], key="profile_upload")
     if st.button("Salveaza profilul") and new_name and new_file:
-        save_profile(new_name, new_file.getvalue(), new_file.name, new_lang)
-        st.success(f"Profil '{new_name}' salvat.")
-        st.rerun()
+        try:
+            save_profile(new_name, new_file.getvalue(), new_file.name, new_lang)
+            st.success(f"Profil '{new_name}' salvat.")
+            st.rerun()
+        except ValueError as ve:
+            st.error(str(ve))
 
 # ===========================================================================
 # PAGE: History
@@ -118,6 +121,7 @@ elif page == "Istoric":
 
                 # --- Run metadata & duration report ---
                 meta_file = run_dir / "run_meta.json"
+                meta = {}
                 cols = st.columns(4)
                 if meta_file.exists():
                     meta = json.loads(meta_file.read_text(encoding="utf-8"))
@@ -128,8 +132,6 @@ elif page == "Istoric":
                     cols[2].metric("Beats", meta.get("beats_total", "?"))
                     cols[3].metric("Motor TTS", meta.get("tts_engine", "?"))
 
-                if script_file.exists():
-                    script_data = json.loads(script_file.read_text(encoding="utf-8"))
                 if timeline.exists():
                     tl_data = json.loads(timeline.read_text(encoding="utf-8"))
                     beats_list = tl_data.get("beats", [])
@@ -332,7 +334,7 @@ else:
             progress.progress(100, text="Videoclip finalizat")
             # --- Duration report (total_audio_sec computed earlier for run_meta.json) ---
             total_audio_min = total_audio_sec / 60
-            target_min = duration if not smoke_test else duration
+            target_min = duration
             delta = total_audio_min - target_min
             delta_label = f"+{delta:.1f}" if delta >= 0 else f"{delta:.1f}"
 
