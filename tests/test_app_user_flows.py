@@ -157,7 +157,7 @@ def test_app_loads_without_error():
     """A user opens the app: it renders title and inputs, no exceptions."""
     at = _new_app().run()
     assert not at.exception
-    assert any("Autonomous AI Video Generator" in t.value for t in at.title)
+    assert any("Autonomous AI Video Generator" in h.value for h in at.header)
     assert _generate_button(at).label == "Genereaza Videoclip"
 
 

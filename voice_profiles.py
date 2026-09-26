@@ -50,6 +50,8 @@ def save_profile(name: str, audio_bytes: bytes, audio_filename: str, language: s
     slug = name.strip().replace(" ", "_").lower()
     if not slug:
         raise ValueError("Profile name cannot be empty.")
+    if "/" in slug or "\\" in slug or ".." in slug:
+        raise ValueError("Profile name contains invalid characters.")
     if len(audio_bytes) < MIN_REFERENCE_BYTES:
         raise ValueError(f"Reference file too small ({len(audio_bytes)} bytes). Minimum is {MIN_REFERENCE_BYTES} bytes.")
     if len(audio_bytes) > MAX_REFERENCE_BYTES:

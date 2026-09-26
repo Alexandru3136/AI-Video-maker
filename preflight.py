@@ -42,7 +42,10 @@ def _check_comfyui_workflow() -> CheckResult:
     path = os.getenv("COMFYUI_WORKFLOW_PATH", "").strip()
     if not path:
         return CheckResult("Workflow ComfyUI", False, False, "COMFYUI_WORKFLOW_PATH nesetat (ComfyUI va fi sarit, se foloseste Pexels)")
-    if not Path(path).expanduser().is_file():
+    resolved = Path(path).expanduser()
+    if not resolved.is_absolute():
+        resolved = Path(__file__).resolve().parent / resolved
+    if not resolved.is_file():
         return CheckResult("Workflow ComfyUI", False, False, f"fisierul nu exista: {path}")
     return CheckResult("Workflow ComfyUI", True, False, "gasit")
 

@@ -47,6 +47,42 @@ for visually exceptional action moments; target approximately 40% of all beats, 
 The remaining beats will use Pexels or images."""
 
 
+def _simplified_schema() -> dict:
+    """Return a Gemini-compatible JSON schema without constraints that cause too-many-states errors."""
+    return {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "scenes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "scene_id": {"type": "integer"},
+                        "narration_text": {"type": "string"},
+                        "beats": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "beat_id": {"type": "integer"},
+                                    "narration_text": {"type": "string"},
+                                    "pexels_keywords": {"type": "string"},
+                                    "fallback_ai_prompt": {"type": "string"},
+                                    "is_key_action_moment": {"type": "boolean"},
+                                },
+                                "required": ["narration_text", "pexels_keywords", "fallback_ai_prompt", "is_key_action_moment"],
+                            },
+                        },
+                    },
+                    "required": ["scene_id", "narration_text", "beats"],
+                },
+            },
+        },
+        "required": ["title", "scenes"],
+    }
+
+
 def _strip_json(text: str) -> str:
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE)
@@ -80,7 +116,7 @@ def generate_script(topic: str, language: str, target_minutes: int) -> VideoScri
                 config={
                     "system_instruction": SYSTEM_PROMPT,
                     "response_mime_type": "application/json",
-                    "response_json_schema": VideoScript.model_json_schema(),
+                    "response_json_schema": _simplified_schema(),
                     "temperature": 0.75,
                 },
             )

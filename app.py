@@ -225,15 +225,14 @@ elif page == "Istoric":
 # PAGE: Generate (main)
 # ===========================================================================
 else:
-    st.title("Autonomous AI Video Generator")
-    st.caption("Gemini + local Chatterbox/Piper TTS + Pexels/Pollinations + optional ComfyUI.")
-    st.caption("Timeline vizual: 40% ComfyUI, 35% Pexels, 25% imagini AI. Fara loop video artificial.")
+    st.header("Autonomous AI Video Generator")
+    st.caption("Gemini + local Chatterbox/Piper TTS + Pexels/Pollinations + optional ComfyUI. Timeline vizual: 40% ComfyUI, 35% Pexels, 25% imagini AI.")
 
     topic = st.text_area("Tema videoclipului", placeholder="Ex.: Cum a schimbat Imperiul Roman comertul in Europa", height=120)
     language = st.selectbox("Limba nararii", ["Romanian", "English", "Russian", "French", "Spanish", "German"])
     aspect_ratio = st.radio("Format video", ["16:9 Long-Form", "9:16 Shorts"], horizontal=True)
     smoke_test = st.checkbox("Smoke test rapid (~1 min, primele cateva beats)", value=False, help="Valideaza intreg pipeline-ul rapid si ieftin inainte de un video complet.")
-    duration = 1 if smoke_test else st.slider("Durata tinta (minute)", min_value=10, max_value=20, value=12)
+    duration = 1 if smoke_test else st.slider("Durata tinta", min_value=10, max_value=20, value=12, format="%d min")
     tts_label = st.selectbox("Motor TTS", available_engines(language))
 
     # --- Voice reference: saved profile or upload ---
@@ -330,7 +329,12 @@ else:
             progress.progress(70, text="Vizualuri pregatite")
 
             status.write("4/4 - Randare finala locala. Aceasta poate dura cateva minute...")
-            output = compose_video(media, run_dir / "final_video.mp4", aspect_ratio)
+
+            def update_render_progress(current: int, total: int) -> None:
+                pct = 70 + int(current / total * 30)
+                progress.progress(pct, text=f"Randare clip {current}/{total}")
+
+            output = compose_video(media, run_dir / "final_video.mp4", aspect_ratio, progress_callback=update_render_progress)
             progress.progress(100, text="Videoclip finalizat")
             # --- Duration report (total_audio_sec computed earlier for run_meta.json) ---
             total_audio_min = total_audio_sec / 60
@@ -354,11 +358,12 @@ else:
             if yt_available():
                 st.divider()
                 yt_title = st.text_input("Titlu YouTube", value=script.title[:100], key="yt_title")
+                yt_desc = st.text_area("Descriere YouTube", value=topic, height=100, key="yt_desc")
                 yt_privacy = st.selectbox("Vizibilitate", ["private", "unlisted", "public"], key="yt_privacy")
                 if st.button("Urca pe YouTube", key="yt_upload"):
                     try:
                         from youtube_upload import upload_video
-                        vid_id = upload_video(output, yt_title, description=topic, privacy=yt_privacy)
+                        vid_id = upload_video(output, yt_title, description=yt_desc, privacy=yt_privacy)
                         st.success(f"Video urcat pe YouTube: https://youtu.be/{vid_id}")
                         log.info("YouTube upload: https://youtu.be/%s", vid_id)
                     except Exception as yt_exc:

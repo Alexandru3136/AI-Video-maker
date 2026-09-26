@@ -134,7 +134,10 @@ def _load_workflow() -> dict:
     path = os.getenv("COMFYUI_WORKFLOW_PATH", "").strip()
     if not path:
         raise RuntimeError("COMFYUI_WORKFLOW_PATH is not configured.")
-    with Path(path).expanduser().open("r", encoding="utf-8") as handle:
+    resolved = Path(path).expanduser()
+    if not resolved.is_absolute():
+        resolved = Path(__file__).resolve().parent / resolved
+    with resolved.open("r", encoding="utf-8") as handle:
         return json.load(handle)
 
 
@@ -263,7 +266,7 @@ def build_scene_media(beats: list[NarrationBeat], audio_paths: list[Path], outpu
             log.error("Beat %d failed permanently after %d retries: %s", beat.beat_id, max_retries, last_error)
 
         if progress_callback:
-            status = actual_source if acquired else f"FAILED ({last_error})"
+            status = media[-1].actual_source if acquired else f"FAILED ({last_error})"
             progress_callback(index, len(beats), plan[beat.beat_id].value, status)
 
     if failed_beats:
