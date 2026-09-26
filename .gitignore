@@ -6,5 +6,6 @@ outputs/
 voices/
 .pytest_cache/
 app.log
+text_to_video_wan.json
 youtube_token.json
 client_secrets.json
