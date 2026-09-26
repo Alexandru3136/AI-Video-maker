@@ -262,12 +262,23 @@ def test_engine_failure_shows_friendly_error_not_crash():
     assert any("Generarea s-a oprit" in e.value for e in at.error)
 
 
-def test_history_page_shows_empty_state():
+def test_history_page_shows_empty_state(tmp_path):
     """Navigating to Istoric with no prior runs shows an info message."""
-    at = _new_app().run()
-    _radio(at, "Navigare").set_value("Istoric").run()
-    assert not at.exception
-    assert any("Nicio generare anterioara" in i.value for i in at.info)
+    # Temporarily rename outputs/ so the history page sees an empty state.
+    backup = None
+    if OUTPUTS.exists():
+        backup = OUTPUTS.with_name("outputs_backup_test")
+        OUTPUTS.rename(backup)
+    try:
+        at = _new_app().run()
+        _radio(at, "Navigare").set_value("Istoric").run()
+        assert not at.exception
+        assert any("Nicio generare anterioara" in i.value for i in at.info)
+    finally:
+        if backup and backup.exists():
+            if OUTPUTS.exists():
+                shutil.rmtree(OUTPUTS)
+            backup.rename(OUTPUTS)
 
 
 def test_history_page_shows_past_run():

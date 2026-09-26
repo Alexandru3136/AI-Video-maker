@@ -13,11 +13,14 @@ Local, zero-cost-oriented Streamlit pipeline for narrated YouTube videos. It com
 - **Portrait-aware Pexels search**: 9:16 Shorts get vertical footage instead of aggressive cropping.
 - **Retry per beat**: a failed visual falls back to Pollinations (2 attempts with different seeds), so one bad download does not stop the whole pipeline.
 - **Persistent voice profiles**: save Chatterbox reference recordings once, reuse them across runs without re-uploading.
-- **History page**: browse past runs with video preview, duration report (target vs actual), per-beat detail, SRT download, and manual beat-level retry with custom keywords.
+- **History page**: browse past runs with video preview, duration report (target vs actual), per-beat detail, SRT download, and manual beat-level retry with custom keywords — the video is automatically recomposed after a beat retry.
 - **Smoke test mode**: checkbox that renders only the first 4 beats end-to-end (~1 minute) to validate the full pipeline cheaply before committing to a 10–20 minute video.
 - **Preflight checks**: on-demand verification of API keys, FFmpeg, GPU, ComfyUI server/workflow, and TTS engine — without exposing secret values.
 - **Duration report**: after generation, shows target vs actual runtime and beat count.
 - **Artifacts**: each run saves `script.json`, `subtitles.srt`, `timeline.json`, and `run_meta.json` alongside the final MP4.
+- **Optional password gate**: set `APP_PASSWORD` in `.env` to require authentication before accessing the UI.
+- **Persistent logging**: all generation events and errors are written to `app.log` for post-mortem debugging.
+- **Optional YouTube upload**: configure Google OAuth2 credentials (`YOUTUBE_CLIENT_SECRETS` in `.env`) to upload finished videos directly to YouTube as private/unlisted/public.
 
 ## Setup (Windows / Python 3.10+)
 
@@ -79,4 +82,19 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-The suite includes 42+ tests: AppTest-driven user flows (page navigation, generation, smoke test, error handling), TTS validation, SRT/timeline artifact integrity, visual planning, Pexels de-duplication, Gemini retry, and voice profile CRUD — all without touching the network or GPU.
+## YouTube upload (optional)
+
+1. Create a Google Cloud project with the YouTube Data API v3 enabled.
+2. Create OAuth2 desktop credentials and download the `client_secrets.json` file.
+3. Set `YOUTUBE_CLIENT_SECRETS=/path/to/client_secrets.json` in `.env`.
+4. Install the extra dependencies:
+
+   ```powershell
+   pip install google-api-python-client google-auth-oauthlib
+   ```
+
+5. After generating a video, the UI will show an "Urca pe YouTube" button. The first time, a browser window opens to authorize your Google account. The token is cached in `youtube_token.json` (gitignored).
+
+## Testing
+
+The suite includes 43+ tests: AppTest-driven user flows (page navigation, generation, smoke test, error handling), TTS validation, SRT/timeline artifact integrity, visual planning, Pexels de-duplication, Gemini retry, and voice profile CRUD — all without touching the network or GPU.

@@ -5,3 +5,6 @@ __pycache__/
 outputs/
 voices/
 .pytest_cache/
+app.log
+youtube_token.json
+client_secrets.json

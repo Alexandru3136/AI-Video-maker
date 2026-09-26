@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler("app.log", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+log = logging.getLogger(__name__)
 
 from media_engine import VisualSource, audio_duration, acquire_visual, build_scene_media
 from preflight import blocking_failures, run_preflight
@@ -21,6 +33,24 @@ ROOT = Path(__file__).resolve().parent
 OUTPUTS = ROOT / "outputs"
 
 st.set_page_config(page_title="AI Video Generator", page_icon="video_camera", layout="wide")
+
+# ---------------------------------------------------------------------------
+# Optional password gate (set APP_PASSWORD in .env to enable)
+# ---------------------------------------------------------------------------
+_app_password = os.environ.get("APP_PASSWORD", "").strip()
+if _app_password:
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+    if not st.session_state["authenticated"]:
+        st.title("Autentificare")
+        pwd = st.text_input("Parola", type="password")
+        if st.button("Intra"):
+            if pwd == _app_password:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Parola incorecta.")
+        st.stop()
 
 # ---------------------------------------------------------------------------
 # Navigation
@@ -150,7 +180,30 @@ elif page == "Istoric":
                                     beat_entry["visual_kind"] = new_kind
                                     beat_entry["actual_source"] = new_source
                                     timeline.write_text(json.dumps(tl_data, ensure_ascii=False, indent=2), encoding="utf-8")
-                                    st.success(f"Beat {bid} re-generat cu succes ({new_source}).")
+                                    # Re-compose the full video with updated visuals.
+                                    from media_engine import SceneMedia
+                                    recompose_media = []
+                                    for b in beats_list:
+                                        from script_engine import NarrationBeat
+                                        rb = NarrationBeat(
+                                            beat_id=b["beat_id"],
+                                            narration_text=b.get("narration_text", ""),
+                                            pexels_keywords=b.get("narration_text", "")[:30],
+                                            fallback_ai_prompt=b.get("narration_text", ""),
+                                            is_key_action_moment=False,
+                                        )
+                                        recompose_media.append(SceneMedia(
+                                            beat=rb,
+                                            audio_path=Path(b["audio_path"]),
+                                            visual_path=Path(b["visual_path"]),
+                                            visual_kind=b["visual_kind"],
+                                            planned_source=b.get("planned_source", ""),
+                                            actual_source=b["actual_source"],
+                                        ))
+                                    ar = meta.get("aspect_ratio", "16:9 Long-Form") if meta_file.exists() else "16:9 Long-Form"
+                                    st.info("Re-randare video cu vizualul actualizat...")
+                                    compose_video(recompose_media, video, ar)
+                                    st.success(f"Beat {bid} re-generat si video-ul recompus.")
                                     st.rerun()
                                 except Exception as exc:
                                     st.error(f"Retry beat {bid} a esuat: {exc}")
@@ -231,6 +284,7 @@ else:
         progress = st.progress(0, text="Pregatire...")
         status = st.empty()
         try:
+            log.info("Starting generation: topic=%.80s lang=%s ar=%s smoke=%s", topic, language, aspect_ratio, smoke_test)
             status.write("1/4 - Generez scenariul structurat cu Gemini...")
             script = generate_script(topic, language, duration)
             run_dir.mkdir(parents=True, exist_ok=True)
@@ -293,6 +347,22 @@ else:
             with output.open("rb") as video_file:
                 st.download_button("Descarca MP4", video_file, file_name=output.name, mime="video/mp4")
 
+            # Optional YouTube upload.
+            from youtube_upload import is_available as yt_available
+            if yt_available():
+                st.divider()
+                yt_title = st.text_input("Titlu YouTube", value=script.title[:100], key="yt_title")
+                yt_privacy = st.selectbox("Vizibilitate", ["private", "unlisted", "public"], key="yt_privacy")
+                if st.button("Urca pe YouTube", key="yt_upload"):
+                    try:
+                        from youtube_upload import upload_video
+                        vid_id = upload_video(output, yt_title, description=topic, privacy=yt_privacy)
+                        st.success(f"Video urcat pe YouTube: https://youtu.be/{vid_id}")
+                        log.info("YouTube upload: https://youtu.be/%s", vid_id)
+                    except Exception as yt_exc:
+                        log.exception("YouTube upload failed")
+                        st.error(f"Upload YouTube esuat: {yt_exc}")
+
             # Offer to save the voice reference as a profile for next time.
             if reference_audio is not None and engine_from_label(tts_label) == "chatterbox":
                 st.divider()
@@ -304,6 +374,7 @@ else:
             with st.expander("Scenariu generat"):
                 st.json(script.model_dump())
         except Exception as exc:
+            log.exception("Generation failed for topic: %.80s", topic)
             progress.empty()
             status.error(f"Generarea s-a oprit: {exc}")
             if run_dir.exists() and not any(run_dir.iterdir()):

@@ -41,11 +41,19 @@ def list_profiles() -> list[VoiceProfile]:
     return profiles
 
 
+MAX_REFERENCE_BYTES = 30 * 1024 * 1024  # 30 MB
+MIN_REFERENCE_BYTES = 5 * 1024  # 5 KB
+
+
 def save_profile(name: str, audio_bytes: bytes, audio_filename: str, language: str) -> VoiceProfile:
     """Save a new voice profile from uploaded audio bytes."""
     slug = name.strip().replace(" ", "_").lower()
     if not slug:
         raise ValueError("Profile name cannot be empty.")
+    if len(audio_bytes) < MIN_REFERENCE_BYTES:
+        raise ValueError(f"Reference file too small ({len(audio_bytes)} bytes). Minimum is {MIN_REFERENCE_BYTES} bytes.")
+    if len(audio_bytes) > MAX_REFERENCE_BYTES:
+        raise ValueError(f"Reference file too large ({len(audio_bytes) // 1024 // 1024} MB). Maximum is {MAX_REFERENCE_BYTES // 1024 // 1024} MB.")
     profile_dir = VOICES_DIR / slug
     profile_dir.mkdir(parents=True, exist_ok=True)
     audio_path = profile_dir / audio_filename
